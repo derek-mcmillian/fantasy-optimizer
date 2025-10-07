@@ -1,0 +1,68 @@
+body {
+    font-family: Arial, sans-serif;
+    width: 700px;
+    min-height: 550px;
+    padding: 10px;
+}
+
+button {
+    width: 100%;
+    padding: 10px;
+    background: #007bff;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.loading {
+    display: none;
+    /* Hidden by default */
+    width: 16px;
+    height: 16px;
+    border: 2px solid #ccc;
+    border-top: 2px solid #333;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+.loading.show {
+    display: inline-block;
+    /* Show when active */
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+#results {
+    margin-top: 10px;
+    max-height: 550px;
+    overflow-y: auto;
+}
+
+h3,
+h4 {
+    margin: 5px 0;
+}
+
+ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+li {
+    margin: 5px 0;
+}

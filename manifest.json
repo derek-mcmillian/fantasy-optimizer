@@ -1,0 +1,36 @@
+{
+    "manifest_version": 3,
+    "name": "Yahoo Fantasy Football Optimizer",
+    "version": "1.0",
+    "description": "Scrape your Yahoo fantasy lineup and get AI sit/start advice via Grok",
+    "permissions": [
+        "storage",
+        "activeTab"
+    ],
+    "host_permissions": [
+        "https://football.fantasysports.yahoo.com/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://football.fantasysports.yahoo.com/*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "Optimize Yahoo Lineup"
+    },
+    "options_ui": {
+        "page": "options.html",
+        "open_in_tab": true
+    },
+    "icons": {
+        "16": "icon16.png",
+        "48": "icon48.png",
+        "128": "icon128.png"
+    }
+}
