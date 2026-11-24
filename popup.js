@@ -1,40 +1,79 @@
 // popup.js
+const DEFAULT_MODEL = 'grok-4';
+
+const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]));
+
+// Models often wrap JSON in ```json fences or add prose; pull out the JSON object.
+function parseModelJson(content) {
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const raw = fenced ? fenced[1] : content;
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start === -1 || end === -1) throw new Error('Model did not return JSON.');
+    return JSON.parse(raw.slice(start, end + 1));
+}
+
+function renderAnalysis(analysis) {
+    let html = '<h3>Optimized Lineup Advice</h3>';
+    (analysis.positions || []).forEach(pos => {
+        html += `<h4>${escapeHtml(pos.pos)}</h4><ul>`;
+        (pos.players || []).forEach(p => {
+            const proj = p.projected != null ? ` — ${escapeHtml(p.projected)} pts` : '';
+            const rec = p.recommendation ? ` <strong>[${escapeHtml(p.recommendation)}]</strong>` : '';
+            html += `<li>${escapeHtml(p.name)}${p.matchup ? ` (${escapeHtml(p.matchup)})` : ''}${proj}${rec}</li>`;
+        });
+        html += '</ul>';
+        if (pos.advice) html += `<p><em>Advice:</em> ${escapeHtml(pos.advice)}</p>`;
+        if (pos.swaps?.length) html += `<p><em>Swaps:</em> ${pos.swaps.map(escapeHtml).join(', ')}</p>`;
+    });
+    if (analysis.summary) html += `<p><strong>Summary:</strong> ${escapeHtml(analysis.summary)}</p>`;
+    return html;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const optimizeBtn = document.getElementById('optimizeBtn');
     const resultsDiv = document.getElementById('results');
+    const loadingIcon = document.getElementById('loadingIcon');
+    const showError = msg => { resultsDiv.innerHTML = `<p style="color:red;">${escapeHtml(msg)}</p>`; };
 
     optimizeBtn.addEventListener('click', async () => {
-        // Disable button and show loading icon
         optimizeBtn.disabled = true;
-        loadingIcon.classList.add('show');
-        resultsDiv.textContent = ''; // Clear previous results
+        loadingIcon?.classList.add('show');
+        resultsDiv.textContent = '';
 
         try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab.url.includes('football.fantasysports.yahoo.com')) {
-                resultsDiv.innerHTML = '<p style="color:red;">Open your Yahoo fantasy team page!</p>';
-                return;
+            if (!tab?.url?.includes('football.fantasysports.yahoo.com')) {
+                return showError('Open your Yahoo fantasy team page!');
             }
 
-            // Scrape lineup
-            const response = await chrome.tabs.sendMessage(tab.id, { action: 'scrapeLineup' });
-            if (response.lineup.error) {
-                resultsDiv.innerHTML = `<p style="color:red;">${response.lineup.error}</p>`;
-                return;
+            let response;
+            try {
+                response = await chrome.tabs.sendMessage(tab.id, { action: 'scrapeLineup' });
+            } catch {
+                return showError('Could not reach the page. Refresh your Yahoo team page and try again.');
+            }
+            if (!response?.lineup || response.lineup.error) {
+                return showError(response?.lineup?.error || 'No lineup returned.');
             }
 
-            // Get API key
-            const { apiKey } = await chrome.storage.sync.get('apiKey');
+            const { apiKey, model } = await chrome.storage.sync.get(['apiKey', 'model']);
             if (!apiKey) {
                 resultsDiv.innerHTML = '<p>Set your Grok API key in extension settings.</p>';
                 return;
             }
 
-            // Format prompt for 0.5 PPR, 6-point TDs
             const lineupStr = JSON.stringify(response.lineup, null, 2);
-            const prompt = `Analyze this Yahoo fantasy football lineup for the current week in a 0.5 PPR league with 6 points per TD. Provide sit/start advice by position, projected points, and suggest bench swaps to optimize the lineup. Consider matchups, injuries, and trends. Lineup: ${lineupStr} Output as JSON: {positions: [{pos: "QB", players: [...], advice: "...", projected: {...}, swaps: [...]}]}`;
+            const prompt = `Analyze this Yahoo fantasy football lineup for the current week in a 0.5 PPR league with 6 points per TD.
+Provide sit/start advice by position, projected points, and suggest bench-to-starter swaps to optimize the lineup.
+Consider matchups (opponentRank describes how many points the opponent allows), injuries (injuryStatus), and trends.
+Note: W/R/T is a flex slot that can hold a WR, RB, or TE.
+Lineup: ${lineupStr}
+Respond with ONLY a JSON object, no markdown, in this shape:
+{"positions":[{"pos":"QB","players":[{"name":"...","matchup":"...","projected":0,"recommendation":"Start|Sit"}],"advice":"...","swaps":["..."]}],"summary":"..."}`;
 
-            // Call Grok API
             const apiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -42,40 +81,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    model: model || DEFAULT_MODEL,
                     messages: [{ role: 'user', content: prompt }],
                     temperature: 0.7,
                     max_tokens: 5000
                 })
             });
 
-            if (!apiResponse.ok) throw new Error(`API error: ${apiResponse.status}`);
+            if (!apiResponse.ok) {
+                const body = await apiResponse.text();
+                throw new Error(`API error ${apiResponse.status}: ${body.slice(0, 300)}`);
+            }
             const data = await apiResponse.json();
-            const analysis = JSON.parse(data.choices[0].message.content); // Grok returns JSON
-
-            // Render results
-            let html = '<h3>Optimized Lineup Advice</h3>';
-            analysis.positions.forEach(pos => {
-                html += `<h4>${pos.pos}</h4><ul>`;
-                pos.players.forEach(player => {
-                    html += `<li><strong>${player.name}</strong> vs ${player.matchup}: ${pos.advice}</li>`;
-                });
-                html += `</ul>`;
-                if (pos.advice) {
-                    html += `<p><em>Advice:</em> ${pos.advice}</p>`;
-                }
-                if (pos.swaps?.length) {
-                    html += `<p><em>Swaps:</em> ${pos.swaps.join(', ')}</p>`;
-                }
-                html += `</ul>`;
-            });
-            resultsDiv.innerHTML = html;
+            const analysis = parseModelJson(data.choices?.[0]?.message?.content || '');
+            resultsDiv.innerHTML = renderAnalysis(analysis);
         } catch (error) {
-            resultsDiv.innerHTML = `<p style="color:red;">Error: ${error.message}</p>`;
-        }
-        finally {
-            // Re-enable button and hide loading icon
+            showError(`Error: ${error.message}`);
+        } finally {
             optimizeBtn.disabled = false;
-            loadingIcon.classList.remove('show');
+            loadingIcon?.classList.remove('show');
         }
     });
 });
